@@ -6,7 +6,7 @@ LIB_DIR = $(BUILD_DIR)/debug
 INCLUDE_DIR = ../include
 
 INCS = -I$(INCLUDE_DIR)
-CFLAGS = -I. -Wall -Werror -pedantic -fsanitize=address -g
+CFLAGS = -I. -Wall -Werror -std=c++17
 
 LIBCRYPTO_DIR = $(dir $(shell find ${BUILD_DIR} -name libcrypto.a))
 LIBSSL_DIR = $(dir $(shell find ${BUILD_DIR} -name libssl.a))
@@ -25,13 +25,13 @@ endif
 
 LIBS = $(LIB_DIR)/libquiche.a -lev -ldl -pthread -lm
 
-all: client server http3-client http3-server
+all: client server # http3-client http3-server
 
-client: client.c $(INCLUDE_DIR)/quiche.h $(LIB_DIR)/libquiche.a
-	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@ $(INCS) $(LIBS)
+client: client.cc $(INCLUDE_DIR)/quiche.h $(LIB_DIR)/libquiche.a
+	$(CXX) $(CFLAGS) $(LDFLAGS) $< -o $@ $(INCS) $(LIBS)
 
-server: server.c $(INCLUDE_DIR)/quiche.h $(LIB_DIR)/libquiche.a
-	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@ $(INCS) $(LIBS)
+server: server.cc $(INCLUDE_DIR)/quiche.h $(LIB_DIR)/libquiche.a
+	$(CXX) $(CFLAGS) $(LDFLAGS) $< -o $@ $(INCS) $(LIBS)
 
 http3-client: http3-client.c $(INCLUDE_DIR)/quiche.h $(LIB_DIR)/libquiche.a
 	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@ $(INCS) $(LIBS)
