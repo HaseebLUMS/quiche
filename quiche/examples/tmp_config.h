@@ -1,0 +1,2 @@
+const int RELIABLE_DATA_SIZE = 0.1 * 1024 * 1024;
+const int UNRELIABLE_DATA_SIZE = 0.2 * 1024 * 1024;

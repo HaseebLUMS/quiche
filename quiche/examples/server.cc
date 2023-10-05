@@ -45,13 +45,12 @@
 
 #include <quiche.h>
 
+#include "tmp_config.h"
+
 #define LOCAL_CONN_ID_LEN 16
 
 #define MAX_DATAGRAM_SIZE 1350
 #define MAX_PKT_SIZE 1200 // Used for sending unreliable datagrams
-
-const int RELIABLE_DATA_SIZE = 0.1 * 1024 * 1024;
-const int UNRELIABLE_DATA_SIZE = 0.2 * 1024 * 1024;
 
 int total_flushed = 0;
 

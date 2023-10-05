@@ -44,9 +44,13 @@
 
 #include <quiche.h>
 
+#include "tmp_config.h"
+
 #define LOCAL_CONN_ID_LEN 16
 
 #define MAX_DATAGRAM_SIZE 1350
+
+ev_timer udp_timer;
 
 int reliable_recvd = 0;
 int unreliable_recvd = 0;
@@ -215,6 +219,7 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
             } else {
                 // std::cout << "Total Dgram Bytes Received: " << recv_len << std::endl;
                 unreliable_recvd += recv_len;
+                ev_timer_start(loop, &udp_timer);
                 // printf("%.*s", (int) recv_len, buf);
             }
         }
@@ -222,6 +227,11 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
     }
 
     flush_egress(loop, conn_io);
+}
+
+static void udp_timeout_cb(EV_P_ ev_timer *w, int revents) {
+    std::cout << "(Timeout) Unreliable data received: " << (1.0*unreliable_recvd) /  UNRELIABLE_DATA_SIZE << std::endl;
+    ev_break(EV_A_ EVBREAK_ONE);
 }
 
 static void timeout_cb(EV_P_ ev_timer *w, int revents) {
@@ -351,6 +361,8 @@ int main(int argc, char *argv[]) {
 
     ev_init(&conn_io->timer, timeout_cb);
     conn_io->timer.data = conn_io;
+
+    ev_timer_init(&udp_timer, udp_timeout_cb, 0.1, 0.0);
 
     flush_egress(loop, conn_io);
 
