@@ -53,6 +53,8 @@
 const int RELIABLE_DATA_SIZE = 0.1 * 1024 * 1024;
 const int UNRELIABLE_DATA_SIZE = 0.2 * 1024 * 1024;
 
+int total_flushed = 0;
+
 void make_chunks_and_send_as_dgrams(quiche_conn *conn, const uint8_t *buf, size_t buf_len) {
     int total_sent = 0;
     while (total_sent < buf_len) {
@@ -73,11 +75,11 @@ void make_chunks_and_send_as_dgrams(quiche_conn *conn, const uint8_t *buf, size_
 void make_chunks_and_send_in_stream(quiche_conn *conn, uint64_t stream_id, const uint8_t *buf, size_t buf_len, bool fin) {
     int total_sent = 0;
     while (total_sent < buf_len) {
-        auto bytes_sent = quiche_conn_stream_send(conn, stream_id, (uint8_t *) buf, std::min((unsigned long)MAX_PKT_SIZE, buf_len-total_sent), fin);
+        auto bytes_sent = quiche_conn_stream_send(conn, stream_id, (uint8_t *) buf, std::min((unsigned long)MAX_PKT_SIZE, buf_len-total_sent), false);
 
         if (bytes_sent == -1) {
-            std::cerr << "Could not send packet in stream" << std::endl;
-            return;
+            std::cerr << "Could not send packet in stream: " << bytes_sent << std::endl;
+            break;
         }
         total_sent += bytes_sent;
     }
@@ -154,7 +156,13 @@ static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
             return;
         }
 
-        fprintf(stderr, "senttt %zd bytes\n", sent);
+        total_flushed += sent;
+        auto ats = (double)send_info.at.tv_sec;
+        auto atns = (double)send_info.at.tv_nsec;
+        if (ats != 0 || atns != 0)
+            std::cout << ats << " : " << atns << std::endl;
+
+        // fprintf(stderr, "senttt %zd bytes\n", sent);
         // std::string str((char *)out, sent);
         // std::cout << str << std::endl;
     }
@@ -226,6 +234,7 @@ static struct conn_io *create_conn(uint8_t *scid, size_t scid_len,
                                    struct sockaddr_storage *peer_addr,
                                    socklen_t peer_addr_len)
 {
+    total_flushed = 0;
     struct conn_io *conn_io = (struct conn_io *)calloc(1, sizeof(*conn_io));
     if (conn_io == NULL) {
         fprintf(stderr, "failed to allocate connection IO\n");
@@ -420,7 +429,7 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
             continue;
         }
 
-        fprintf(stderr, "recv %zd bytes\n", done);
+        // fprintf(stderr, "recv %zd bytes\n", done);
 
         if (quiche_conn_is_established(conn_io->conn)) {
             uint64_t s = 0;
@@ -455,15 +464,14 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
                         reliable_resp = (std::string)tcp_data_buffer.data() + (std::string)udp_data_buffer.data();
                         unreliable_resp = "";
                     } else if (strncmp((char *)msg, "udp", 3) == 0) {
-                        std::cout << "Sending Both Reliable & Unreliable Data" << std::endl;
+                        std::cout << "Sending Both Reliable (" << tcp_data_buffer.size() << ") & Unreliable Data (" << udp_data_buffer.size() << ")" << std::endl;
                         reliable_resp = (std::string)tcp_data_buffer.data();
                         unreliable_resp = (std::string)udp_data_buffer.data();
                     }
 
-                    reliable_resp += "\n";
-                    unreliable_resp += "\n";
-
-                    // quiche_conn_stream_send(conn_io->conn, s, (uint8_t *) reliable_resp.data(), reliable_resp.size(), true);
+                    // std::cout << "--> " << reliable_resp.size() << ", cap: " << (int)quiche_conn_stream_capacity(conn_io->conn, s) << std::endl;
+                    // auto bytes_sent = quiche_conn_stream_send(conn_io->conn, s, (uint8_t *) reliable_resp.data(), reliable_resp.size(), true);
+                    // std::cout << "==> " << bytes_sent << std::endl;
                     make_chunks_and_send_in_stream(conn_io->conn, s, (uint8_t *) reliable_resp.data(), reliable_resp.size(), true);
                     if (unreliable_resp.size() > 1) {
                         make_chunks_and_send_as_dgrams(conn_io->conn, (uint8_t *) unreliable_resp.data(), unreliable_resp.size());
@@ -512,7 +520,7 @@ static void timeout_cb(EV_P_ ev_timer *w, int revents) {
 
         quiche_conn_stats(conn_io->conn, &stats);
         quiche_conn_path_stats(conn_io->conn, 0, &path_stats);
-
+        std::cout << "Total flushed: " << total_flushed << std::endl;
         fprintf(stderr, "connection closed, recv=%zu sent=%zu lost=%zu rtt=%" PRIu64 "ns cwnd=%zu\n",
                 stats.recv, stats.sent, stats.lost, path_stats.rtt, path_stats.cwnd);
 
@@ -572,12 +580,14 @@ int main(int argc, char *argv[]) {
     quiche_config_set_application_protos(config,
         (uint8_t *) "\x0ahq-interop\x05hq-29\x05hq-28\x05hq-27\x08http/0.9", 38);
 
+    quiche_config_set_initial_congestion_window_packets(config, 100);
     quiche_config_set_max_idle_timeout(config, 5000);
     quiche_config_set_max_recv_udp_payload_size(config, MAX_DATAGRAM_SIZE);
     quiche_config_set_max_send_udp_payload_size(config, MAX_DATAGRAM_SIZE);
-    quiche_config_set_initial_max_data(config, 10000000);
-    quiche_config_set_initial_max_stream_data_bidi_local(config, 1000000);
-    quiche_config_set_initial_max_stream_data_bidi_remote(config, 1000000);
+    quiche_config_set_initial_max_data(config, 20000000);
+    quiche_config_set_initial_max_stream_data_bidi_local(config, 5000000);
+    quiche_config_set_initial_max_stream_data_bidi_remote(config, 5000000);
+    quiche_config_set_initial_max_stream_data_uni(config, 5000000);
     quiche_config_set_initial_max_streams_bidi(config, 100);
     quiche_config_set_cc_algorithm(config, QUICHE_CC_RENO);
     quiche_config_enable_dgram(config, true, 5000, 5000);

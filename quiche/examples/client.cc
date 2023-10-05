@@ -48,6 +48,9 @@
 
 #define MAX_DATAGRAM_SIZE 1350
 
+int reliable_recvd = 0;
+int unreliable_recvd = 0;
+int total_recv = 0;
 struct conn_io {
     ev_timer timer;
 
@@ -140,7 +143,8 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
             continue;
         }
 
-        fprintf(stderr, "recv %zd bytes\n", done);
+        // fprintf(stderr, "recv %zd bytes\n", done);
+        total_recv += done;
     }
 
     fprintf(stderr, "done reading\n");
@@ -178,23 +182,27 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
         quiche_stream_iter *readable = quiche_conn_readable(conn_io->conn);
 
         while (quiche_stream_iter_next(readable, &s)) {
-            fprintf(stderr, "stream %" PRIu64 " is readable\n", s);
+            // fprintf(stderr, "stream %" PRIu64 " is readable\n", s);
 
-            bool fin = false;
-            ssize_t recv_len = quiche_conn_stream_recv(conn_io->conn, s,
-                                                       buf, sizeof(buf),
-                                                       &fin);
-            if (recv_len < 0) {
-                break;
+            while (1) {
+                bool fin = false;
+                ssize_t recv_len = quiche_conn_stream_recv(conn_io->conn, s,
+                                                        buf, sizeof(buf),
+                                                        &fin);
+                if (recv_len <= 0) {
+                    break;
+                }
+
+                // std::cout << "Total Stream Bytes Received: " << recv_len << std::endl;
+                reliable_recvd += recv_len;
+                // printf("%.*s", (int) recv_len, buf);
+
+                // if (fin) {
+                //     if (quiche_conn_close(conn_io->conn, true, 0, NULL, 0) < 0) {
+                //         fprintf(stderr, "failed to close connection\n");
+                //     }
+                // }
             }
-            std::cout << "Total Stream Bytes Received: " << recv_len << std::endl;
-            // printf("%.*s", (int) recv_len, buf);
-
-            // if (fin) {
-            //     if (quiche_conn_close(conn_io->conn, true, 0, NULL, 0) < 0) {
-            //         fprintf(stderr, "failed to close connection\n");
-            //     }
-            // }
         }
 
         quiche_stream_iter_free(readable);
@@ -202,10 +210,11 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
         while (1) {
             ssize_t recv_len = quiche_conn_dgram_recv(conn_io->conn, buf, sizeof(buf));
             if (recv_len < 0) {
-                std::cout << "No Dgrams :sad" << std::endl;
+                // std::cout << "No Dgrams :sad" << std::endl;
                 break;
             } else {
-                std::cout << "Total Dgram Bytes Received: " << recv_len << std::endl;
+                // std::cout << "Total Dgram Bytes Received: " << recv_len << std::endl;
+                unreliable_recvd += recv_len;
                 // printf("%.*s", (int) recv_len, buf);
             }
         }
@@ -279,9 +288,10 @@ int main(int argc, char *argv[]) {
     quiche_config_set_max_idle_timeout(config, 5000);
     quiche_config_set_max_recv_udp_payload_size(config, MAX_DATAGRAM_SIZE);
     quiche_config_set_max_send_udp_payload_size(config, MAX_DATAGRAM_SIZE);
-    quiche_config_set_initial_max_data(config, 10000000);
-    quiche_config_set_initial_max_stream_data_bidi_local(config, 1000000);
-    quiche_config_set_initial_max_stream_data_uni(config, 1000000);
+    quiche_config_set_initial_max_data(config, 20000000);
+    quiche_config_set_initial_max_stream_data_bidi_local(config, 5000000);
+    quiche_config_set_initial_max_stream_data_bidi_remote(config, 5000000);
+    quiche_config_set_initial_max_stream_data_uni(config, 5000000);
     quiche_config_set_initial_max_streams_bidi(config, 100);
     quiche_config_set_initial_max_streams_uni(config, 100);
     quiche_config_set_disable_active_migration(config, true);
@@ -351,6 +361,10 @@ int main(int argc, char *argv[]) {
     quiche_conn_free(conn);
 
     quiche_config_free(config);
+
+    std::cout << "Reliably Received: " << reliable_recvd << std::endl;
+    std::cout << "Unreliably Received: " << unreliable_recvd << std::endl;
+    std::cout << "Total Received: " << total_recv << std::endl;
 
     return 0;
 }
