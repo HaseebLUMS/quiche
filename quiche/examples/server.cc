@@ -50,8 +50,8 @@
 #define MAX_DATAGRAM_SIZE 1350
 #define MAX_PKT_SIZE 1200 // Used for sending unreliable datagrams
 
-const int RELIABLE_DATA_SIZE = 0.0001 * 1024 * 1024;
-const int UNRELIABLE_DATA_SIZE = 0.0002 * 1024 * 1024;
+const int RELIABLE_DATA_SIZE = 0.1 * 1024 * 1024;
+const int UNRELIABLE_DATA_SIZE = 0.2 * 1024 * 1024;
 
 void make_chunks_and_send_as_dgrams(quiche_conn *conn, const uint8_t *buf, size_t buf_len) {
     int total_sent = 0;
@@ -204,6 +204,7 @@ static bool validate_token(const uint8_t *token, size_t token_len,
 
 static uint8_t *gen_cid(uint8_t *cid, size_t cid_len) {
     int rng = open("/dev/urandom", O_RDONLY);
+
     if (rng < 0) {
         perror("failed to open /dev/urandom");
         return NULL;

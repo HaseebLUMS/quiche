@@ -187,25 +187,29 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
             if (recv_len < 0) {
                 break;
             }
+            std::cout << "Total Stream Bytes Received: " << recv_len << std::endl;
+            // printf("%.*s", (int) recv_len, buf);
 
-            printf("%.*s", (int) recv_len, buf);
-
-            if (fin) {
-                if (quiche_conn_close(conn_io->conn, true, 0, NULL, 0) < 0) {
-                    fprintf(stderr, "failed to close connection\n");
-                }
-            }
-        }
-
-        ssize_t recv_len = quiche_conn_dgram_recv(conn_io->conn, buf, sizeof(buf));
-        if (recv_len < 0) {
-            std::cout << "No Dgrams :sad" << std::endl;
-            return;
-        } else {
-            printf("%.*s", (int) recv_len, buf);
+            // if (fin) {
+            //     if (quiche_conn_close(conn_io->conn, true, 0, NULL, 0) < 0) {
+            //         fprintf(stderr, "failed to close connection\n");
+            //     }
+            // }
         }
 
         quiche_stream_iter_free(readable);
+
+        while (1) {
+            ssize_t recv_len = quiche_conn_dgram_recv(conn_io->conn, buf, sizeof(buf));
+            if (recv_len < 0) {
+                std::cout << "No Dgrams :sad" << std::endl;
+                break;
+            } else {
+                std::cout << "Total Dgram Bytes Received: " << recv_len << std::endl;
+                // printf("%.*s", (int) recv_len, buf);
+            }
+        }
+
     }
 
     flush_egress(loop, conn_io);

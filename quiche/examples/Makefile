@@ -6,7 +6,7 @@ LIB_DIR = $(BUILD_DIR)/debug
 INCLUDE_DIR = ../include
 
 INCS = -I$(INCLUDE_DIR)
-CFLAGS = -I. -Wall -Werror -std=c++17
+CFLAGS = -I. -std=c++17 # -Wall -Werror 
 
 LIBCRYPTO_DIR = $(dir $(shell find ${BUILD_DIR} -name libcrypto.a))
 LIBSSL_DIR = $(dir $(shell find ${BUILD_DIR} -name libssl.a))
