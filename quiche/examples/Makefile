@@ -27,10 +27,10 @@ LIBS = $(LIB_DIR)/libquiche.a -lev -ldl -pthread -lm
 
 all: client server # http3-client http3-server
 
-client: client.cc $(INCLUDE_DIR)/quiche.h $(LIB_DIR)/libquiche.a
+client: client.cc $(INCLUDE_DIR)/quiche.h $(LIB_DIR)/libquiche.a tmp_config.h
 	$(CXX) $(CFLAGS) $(LDFLAGS) $< -o $@ $(INCS) $(LIBS)
 
-server: server.cc $(INCLUDE_DIR)/quiche.h $(LIB_DIR)/libquiche.a
+server: server.cc $(INCLUDE_DIR)/quiche.h $(LIB_DIR)/libquiche.a tmp_config.h
 	$(CXX) $(CFLAGS) $(LDFLAGS) $< -o $@ $(INCS) $(LIBS)
 
 http3-client: http3-client.c $(INCLUDE_DIR)/quiche.h $(LIB_DIR)/libquiche.a

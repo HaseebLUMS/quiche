@@ -70,6 +70,11 @@ struct conn_io {
 //     fprintf(stderr, "%s\n", line);
 // }
 
+ssize_t send_using_txtime(int sock, uint8_t* out, ssize_t len, int flags, struct sockaddr * dst_addr, socklen_t dst_addr_len) {
+    auto res = sendto(sock, out, len, flags, dst_addr, dst_addr_len);
+    return res;
+}
+
 static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
     static uint8_t out[MAX_DATAGRAM_SIZE];
 
@@ -89,7 +94,7 @@ static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
             return;
         }
 
-        ssize_t sent = sendto(conn_io->sock, out, written, 0,
+        ssize_t sent = send_using_txtime(conn_io->sock, out, written, 0,
                               (struct sockaddr *) &send_info.to,
                               send_info.to_len);
 
@@ -306,6 +311,7 @@ int main(int argc, char *argv[]) {
     quiche_config_set_initial_max_streams_uni(config, 100);
     quiche_config_set_disable_active_migration(config, true);
     quiche_config_enable_dgram(config, true, 5000, 5000);
+    quiche_config_verify_peer(config, false);
 
     if (getenv("SSLKEYLOGFILE")) {
       quiche_config_log_keys(config);
@@ -362,7 +368,7 @@ int main(int argc, char *argv[]) {
     ev_init(&conn_io->timer, timeout_cb);
     conn_io->timer.data = conn_io;
 
-    ev_timer_init(&udp_timer, udp_timeout_cb, 0.1, 0.0);
+    ev_timer_init(&udp_timer, udp_timeout_cb, 1, 0.0);
 
     flush_egress(loop, conn_io);
 

@@ -33,6 +33,9 @@
 #include <iostream>
 #include <vector>
 
+#include <chrono>
+#include <thread>
+
 #include <fcntl.h>
 #include <errno.h>
 
@@ -81,6 +84,7 @@ void make_chunks_and_send_in_stream(quiche_conn *conn, uint64_t stream_id, const
             break;
         }
         total_sent += bytes_sent;
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 
     std::cout << "Total Stream Data sent: " << total_sent << std::endl;
@@ -127,6 +131,48 @@ static void timeout_cb(EV_P_ ev_timer *w, int revents);
 //     fprintf(stderr, "%s\n", line);
 // }
 
+ssize_t send_using_txtime(int sock, uint8_t* out, ssize_t len, int flags, struct sockaddr * dst_addr, socklen_t dst_addr_len, timespec txtime) {
+    struct iovec iov[1];
+    iov[0].iov_base = out;
+    iov[0].iov_len = len;
+
+    // Create a control message with SCM_TXTIME
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = dst_addr;
+    msg.msg_namelen = dst_addr_len;
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 1;
+
+    // Create a control message buffer
+    char control_data[CMSG_SPACE(sizeof(struct timespec))];
+    msg.msg_control = control_data;
+    msg.msg_controllen = sizeof(control_data);
+
+    // Set up the control message
+    struct cmsghdr *cmsg;
+    cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_TXTIME;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(uint64_t));
+    uint64_t timestamp_ns = txtime.tv_sec *(1000ULL * 1000 * 1000) + txtime.tv_nsec;
+    
+    // Set the timestamp
+    struct timespec txtimestamp;
+    txtimestamp.tv_sec = txtime.tv_sec; // Set your desired time in seconds
+    txtimestamp.tv_nsec = txtime.tv_sec; // Set your desired time in nanoseconds
+    memcpy(CMSG_DATA(cmsg), &txtime, sizeof(struct timespec));
+
+    // Send the message with control information
+    ssize_t bytes_sent = sendmsg(sock, &msg, 0);
+    if (bytes_sent == -1) {
+        perror("sendmsg");
+        close(sock);
+        return -1;
+    }
+    return bytes_sent;
+}
+
 static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
     static uint8_t out[MAX_DATAGRAM_SIZE];
 
@@ -146,9 +192,9 @@ static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
             return;
         }
 
-        ssize_t sent = sendto(conn_io->sock, out, written, 0,
+        ssize_t sent = send_using_txtime(conn_io->sock, out, written, 0,
                               (struct sockaddr *) &send_info.to,
-                              send_info.to_len);
+                              send_info.to_len, send_info.at);
 
         if (sent != written) {
             perror("failed to send");
@@ -579,16 +625,17 @@ int main(int argc, char *argv[]) {
     quiche_config_set_application_protos(config,
         (uint8_t *) "\x0ahq-interop\x05hq-29\x05hq-28\x05hq-27\x08http/0.9", 38);
 
-    quiche_config_set_initial_congestion_window_packets(config, 100);
+    quiche_config_set_initial_congestion_window_packets(config, 10);
     quiche_config_set_max_idle_timeout(config, 5000);
     quiche_config_set_max_recv_udp_payload_size(config, MAX_DATAGRAM_SIZE);
     quiche_config_set_max_send_udp_payload_size(config, MAX_DATAGRAM_SIZE);
-    quiche_config_set_initial_max_data(config, 20000000);
+    quiche_config_set_initial_max_data(config, 50000000);
     quiche_config_set_initial_max_stream_data_bidi_local(config, 5000000);
     quiche_config_set_initial_max_stream_data_bidi_remote(config, 5000000);
     quiche_config_set_initial_max_stream_data_uni(config, 5000000);
     quiche_config_set_initial_max_streams_bidi(config, 100);
-    quiche_config_set_cc_algorithm(config, QUICHE_CC_RENO);
+    quiche_config_set_cc_algorithm(config, QUICHE_CC_CUBIC);
+    quiche_config_verify_peer(config, false);
     quiche_config_enable_dgram(config, true, 5000, 5000);
 
     struct connections c;
