@@ -42,6 +42,8 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <linux/net_tstamp.h>
+#include <linux/ip.h>
 
 #include <ev.h>
 #include <uthash.h>
@@ -132,6 +134,8 @@ static void timeout_cb(EV_P_ ev_timer *w, int revents);
 // }
 
 ssize_t send_using_txtime(int sock, uint8_t* out, ssize_t len, int flags, struct sockaddr * dst_addr, socklen_t dst_addr_len, timespec txtime) {
+    
+    // return sendto(sock, out, len, flags, dst_addr, dst_addr_len);
     struct iovec iov[1];
     iov[0].iov_base = out;
     iov[0].iov_len = len;
@@ -156,12 +160,7 @@ ssize_t send_using_txtime(int sock, uint8_t* out, ssize_t len, int flags, struct
     cmsg->cmsg_type = SCM_TXTIME;
     cmsg->cmsg_len = CMSG_LEN(sizeof(uint64_t));
     uint64_t timestamp_ns = txtime.tv_sec *(1000ULL * 1000 * 1000) + txtime.tv_nsec;
-    
-    // Set the timestamp
-    struct timespec txtimestamp;
-    txtimestamp.tv_sec = txtime.tv_sec; // Set your desired time in seconds
-    txtimestamp.tv_nsec = txtime.tv_sec; // Set your desired time in nanoseconds
-    memcpy(CMSG_DATA(cmsg), &txtime, sizeof(struct timespec));
+    memcpy(CMSG_DATA(cmsg), &timestamp_ns, sizeof(uint64_t));
 
     // Send the message with control information
     ssize_t bytes_sent = sendmsg(sock, &msg, 0);
@@ -192,6 +191,8 @@ static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
             return;
         }
 
+        std::cout << "At: " << send_info.at.tv_sec << " " << send_info.at.tv_nsec << std::endl;
+
         ssize_t sent = send_using_txtime(conn_io->sock, out, written, 0,
                               (struct sockaddr *) &send_info.to,
                               send_info.to_len, send_info.at);
@@ -204,8 +205,8 @@ static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
         total_flushed += sent;
         auto ats = (double)send_info.at.tv_sec;
         auto atns = (double)send_info.at.tv_nsec;
-        if (ats != 0 || atns != 0)
-            std::cout << ats << " : " << atns << std::endl;
+        // if (ats != 0 || atns != 0)
+        //     std::cout << ats << " : " << atns << std::endl;
 
         // fprintf(stderr, "senttt %zd bytes\n", sent);
         // std::string str((char *)out, sent);
@@ -579,6 +580,32 @@ static void timeout_cb(EV_P_ ev_timer *w, int revents) {
     }
 }
 
+static void setsockopt_txtime(int sock)
+{
+    // Method from https://github.com/zephyrproject-rtos/zephyr/blob/main/samples/net/sockets/txtime/src/main.c
+    // bool optval = true;
+	// if (setsockopt(sock, SOL_SOCKET, SO_TXTIME, &optval, sizeof(optval))) {
+    //     perror("setsockopt txtime (0)");
+    // }
+
+    // Method from https://unix.stackexchange.com/questions/718661/after-enabling-etf-qdisc-packets-are-only-sent-for-a-few-seconds
+    struct sock_txtime so_txtime_val = { .clockid = CLOCK_MONOTONIC };
+    struct sock_txtime so_txtime_val_read = { 1 };
+    socklen_t vallen = sizeof(so_txtime_val);
+    so_txtime_val.flags = (SOF_TXTIME_REPORT_ERRORS);
+    if (setsockopt(sock, SOL_SOCKET, SO_TXTIME, &so_txtime_val, sizeof(so_txtime_val))) {
+        perror("setsockopt txtime (1)");
+    }
+
+    if (getsockopt(sock, SOL_SOCKET, SO_TXTIME, &so_txtime_val_read, &vallen)) {
+        perror("getsockopt txtime (2)");
+    }
+
+    if (vallen != sizeof(so_txtime_val) || memcmp(&so_txtime_val, &so_txtime_val_read, vallen)) {
+        perror("getsockopt txtime: mismatch");
+    }
+}
+
 int main(int argc, char *argv[]) {
     const char *host = argv[1];
     const char *port = argv[2];
@@ -612,6 +639,8 @@ int main(int argc, char *argv[]) {
         perror("failed to connect socket");
         return -1;
     }
+
+    setsockopt_txtime(sock);
 
     config = quiche_config_new(QUICHE_PROTOCOL_VERSION);
     if (config == NULL) {
@@ -662,3 +691,5 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
+
+// Don't forget to run `sudo tc qdisc add dev lo root fq maxrate 2gbit`
