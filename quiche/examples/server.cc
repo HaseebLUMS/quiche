@@ -58,6 +58,8 @@
 #define MAX_PKT_SIZE 1200 // Used for sending unreliable datagrams
 
 int total_flushed = 0;
+std::string reliable_resp = "";
+int processed = 0;
 
 void make_chunks_and_send_as_dgrams(quiche_conn *conn, const uint8_t *buf, size_t buf_len) {
     int total_sent = 0;
@@ -80,13 +82,11 @@ void make_chunks_and_send_in_stream(quiche_conn *conn, uint64_t stream_id, const
     int total_sent = 0;
     while (total_sent < buf_len) {
         auto bytes_sent = quiche_conn_stream_send(conn, stream_id, (uint8_t *) buf, std::min((unsigned long)MAX_PKT_SIZE, buf_len-total_sent), false);
-
         if (bytes_sent == -1) {
             std::cerr << "Could not send packet in stream: " << bytes_sent << std::endl;
             break;
         }
         total_sent += bytes_sent;
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 
     std::cout << "Total Stream Data sent: " << total_sent << std::endl;
@@ -149,18 +149,20 @@ ssize_t send_using_txtime(int sock, uint8_t* out, ssize_t len, int flags, struct
     msg.msg_iovlen = 1;
 
     // Create a control message buffer
-    char control_data[CMSG_SPACE(sizeof(struct timespec))];
-    msg.msg_control = control_data;
-    msg.msg_controllen = sizeof(control_data);
+    // char control_data[CMSG_SPACE(sizeof(struct timespec))];
+    // msg.msg_control = control_data;
+    // msg.msg_controllen = sizeof(control_data);
 
-    // Set up the control message
-    struct cmsghdr *cmsg;
-    cmsg = CMSG_FIRSTHDR(&msg);
-    cmsg->cmsg_level = SOL_SOCKET;
-    cmsg->cmsg_type = SCM_TXTIME;
-    cmsg->cmsg_len = CMSG_LEN(sizeof(uint64_t));
-    uint64_t timestamp_ns = txtime.tv_sec *(1000ULL * 1000 * 1000) + txtime.tv_nsec;
-    memcpy(CMSG_DATA(cmsg), &timestamp_ns, sizeof(uint64_t));
+    // // Set up the control message
+    // struct cmsghdr *cmsg;
+    // cmsg = CMSG_FIRSTHDR(&msg);
+    // cmsg->cmsg_level = SOL_SOCKET;
+    // cmsg->cmsg_type = SCM_TXTIME;
+    // cmsg->cmsg_len = CMSG_LEN(sizeof(uint64_t));
+    // uint64_t timestamp_ns = txtime.tv_sec *(1000ULL * 1000 * 1000) + txtime.tv_nsec;
+    // // uint64_t timestamp_ns = txtime.tv_sec *(1000ULL * 1000 * 1000 * 1.001) + txtime.tv_nsec;
+    // // uint64_t timestamp_ns = 0;
+    // memcpy(CMSG_DATA(cmsg), &timestamp_ns, sizeof(uint64_t));
 
     // Send the message with control information
     ssize_t bytes_sent = sendmsg(sock, &msg, 0);
@@ -182,7 +184,7 @@ static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
                                            &send_info);
 
         if (written == QUICHE_ERR_DONE) {
-            fprintf(stderr, "done writing\n");
+            // fprintf(stderr, "done writing\n");
             break;
         }
 
@@ -190,8 +192,6 @@ static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
             fprintf(stderr, "failed to create packet: %zd\n", written);
             return;
         }
-
-        std::cout << "At: " << send_info.at.tv_sec << " " << send_info.at.tv_nsec << std::endl;
 
         ssize_t sent = send_using_txtime(conn_io->sock, out, written, 0,
                               (struct sockaddr *) &send_info.to,
@@ -336,8 +336,6 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
     uint8_t buf[65535];
     uint8_t out[MAX_DATAGRAM_SIZE];
 
-    bool streaming = false;
-
     while (1) {
         struct sockaddr_storage peer_addr;
         socklen_t peer_addr_len = sizeof(peer_addr);
@@ -349,7 +347,7 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
 
         if (read < 0) {
             if ((errno == EWOULDBLOCK) || (errno == EAGAIN)) {
-                fprintf(stderr, "recv would block\n");
+                // fprintf(stderr, "recv would block\n");
                 break;
             }
 
@@ -475,9 +473,21 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
             continue;
         }
 
+
+
         // fprintf(stderr, "recv %zd bytes\n", done);
 
         if (quiche_conn_is_established(conn_io->conn)) {
+            uint64_t ws = 0;
+            quiche_stream_iter *writable = quiche_conn_writable(conn_io->conn);
+            while (quiche_stream_iter_next(writable, &ws)) {
+                if (processed < reliable_resp.size()) {
+                    auto bytes_sent = quiche_conn_stream_send(conn_io->conn, ws, (uint8_t *) reliable_resp.data()+processed, reliable_resp.size()-processed, true);
+                    processed += bytes_sent;
+                }
+            }
+            quiche_stream_iter_free(writable);
+
             uint64_t s = 0;
 
             quiche_stream_iter *readable = quiche_conn_readable(conn_io->conn);
@@ -503,7 +513,7 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
                 msg = "udp";
 
                 if (fin) {
-                    std::string reliable_resp = "byez\n";
+                    reliable_resp = "byez\n";
                     std::string unreliable_resp = "";
                     if (strncmp((char *)msg, "tcp", 3) == 0) {
                         std::cout << "Sending Only Reliable Data" << std::endl;
@@ -515,10 +525,9 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
                         unreliable_resp = (std::string)udp_data_buffer.data();
                     }
 
-                    // std::cout << "--> " << reliable_resp.size() << ", cap: " << (int)quiche_conn_stream_capacity(conn_io->conn, s) << std::endl;
-                    // auto bytes_sent = quiche_conn_stream_send(conn_io->conn, s, (uint8_t *) reliable_resp.data(), reliable_resp.size(), true);
-                    // std::cout << "==> " << bytes_sent << std::endl;
-                    make_chunks_and_send_in_stream(conn_io->conn, s, (uint8_t *) reliable_resp.data(), reliable_resp.size(), true);
+                    auto bytes_sent = quiche_conn_stream_send(conn_io->conn, s, (uint8_t *) reliable_resp.data(), reliable_resp.size(), true);
+                    processed = bytes_sent;
+
                     if (unreliable_resp.size() > 1) {
                         make_chunks_and_send_as_dgrams(conn_io->conn, (uint8_t *) unreliable_resp.data(), unreliable_resp.size());
                     }
@@ -530,8 +539,7 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
     }
 
     HASH_ITER(hh, conns->h, conn_io, tmp) {
-        if (!streaming)
-            flush_egress(loop, conn_io);
+        flush_egress(loop, conn_io);
 
         if (quiche_conn_is_closed(conn_io->conn)) {
             quiche_stats stats;
@@ -666,6 +674,7 @@ int main(int argc, char *argv[]) {
     quiche_config_set_cc_algorithm(config, QUICHE_CC_CUBIC);
     quiche_config_verify_peer(config, false);
     quiche_config_enable_dgram(config, true, 5000, 5000);
+    quiche_config_enable_pacing(config, true);
 
     struct connections c;
     c.sock = sock;

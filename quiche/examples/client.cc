@@ -55,6 +55,8 @@ ev_timer udp_timer;
 int reliable_recvd = 0;
 int unreliable_recvd = 0;
 int total_recv = 0;
+
+
 struct conn_io {
     ev_timer timer;
 
@@ -85,7 +87,7 @@ static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
                                            &send_info);
 
         if (written == QUICHE_ERR_DONE) {
-            fprintf(stderr, "done writing\n");
+            // fprintf(stderr, "done writing\n");
             break;
         }
 
@@ -103,7 +105,7 @@ static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
             return;
         }
 
-        fprintf(stderr, "sent %zd bytes\n", sent);
+        // fprintf(stderr, "sent %zd bytes\n", sent);
     }
 
     double t = quiche_conn_timeout_as_nanos(conn_io->conn) / 1e9f;
@@ -129,7 +131,7 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
 
         if (read < 0) {
             if ((errno == EWOULDBLOCK) || (errno == EAGAIN)) {
-                fprintf(stderr, "recv would block\n");
+                // fprintf(stderr, "recv would block\n");
                 break;
             }
 
@@ -156,7 +158,7 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
         total_recv += done;
     }
 
-    fprintf(stderr, "done reading\n");
+    // fprintf(stderr, "done reading\n");
 
     if (quiche_conn_is_closed(conn_io->conn)) {
         fprintf(stderr, "connection closed\n");
@@ -219,12 +221,14 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
         while (1) {
             ssize_t recv_len = quiche_conn_dgram_recv(conn_io->conn, buf, sizeof(buf));
             if (recv_len < 0) {
-                // std::cout << "No Dgrams :sad" << std::endl;
                 break;
             } else {
                 // std::cout << "Total Dgram Bytes Received: " << recv_len << std::endl;
                 unreliable_recvd += recv_len;
-                ev_timer_start(loop, &udp_timer);
+                if (unreliable_recvd >= UNRELIABLE_DATA_SIZE) {
+                    ev_timer_stop(loop, &udp_timer);
+                }
+                // ev_timer_start(loop, &udp_timer);
                 // printf("%.*s", (int) recv_len, buf);
             }
         }
@@ -243,7 +247,7 @@ static void timeout_cb(EV_P_ ev_timer *w, int revents) {
     struct conn_io *conn_io = (struct conn_io *)w->data;
     quiche_conn_on_timeout(conn_io->conn);
 
-    fprintf(stderr, "timeout\n");
+    // fprintf(stderr, "timeout\n");
 
     flush_egress(loop, conn_io);
 
@@ -299,11 +303,13 @@ int main(int argc, char *argv[]) {
 
     quiche_config_set_application_protos(config,
         (uint8_t *) "\x0ahq-interop\x05hq-29\x05hq-28\x05hq-27\x08http/0.9", 38);
-
+    
+    quiche_config_set_cc_algorithm(config, QUICHE_CC_CUBIC);
+    quiche_config_set_initial_congestion_window_packets(config, 10);
     quiche_config_set_max_idle_timeout(config, 5000);
     quiche_config_set_max_recv_udp_payload_size(config, MAX_DATAGRAM_SIZE);
     quiche_config_set_max_send_udp_payload_size(config, MAX_DATAGRAM_SIZE);
-    quiche_config_set_initial_max_data(config, 20000000);
+    quiche_config_set_initial_max_data(config, 50000000);
     quiche_config_set_initial_max_stream_data_bidi_local(config, 5000000);
     quiche_config_set_initial_max_stream_data_bidi_remote(config, 5000000);
     quiche_config_set_initial_max_stream_data_uni(config, 5000000);
@@ -312,6 +318,7 @@ int main(int argc, char *argv[]) {
     quiche_config_set_disable_active_migration(config, true);
     quiche_config_enable_dgram(config, true, 5000, 5000);
     quiche_config_verify_peer(config, false);
+    quiche_config_enable_pacing(config, true);
 
     if (getenv("SSLKEYLOGFILE")) {
       quiche_config_log_keys(config);
@@ -380,8 +387,8 @@ int main(int argc, char *argv[]) {
 
     quiche_config_free(config);
 
-    std::cout << "Reliably Received: " << reliable_recvd << std::endl;
-    std::cout << "Unreliably Received: " << unreliable_recvd << std::endl;
+    std::cout << "Reliably Received: " << reliable_recvd << " " << (reliable_recvd*1.0/RELIABLE_DATA_SIZE) << std::endl;
+    std::cout << "Unreliably Received: " << unreliable_recvd << " " << (unreliable_recvd*1.0/UNRELIABLE_DATA_SIZE) << std::endl;
     std::cout << "Total Received: " << total_recv << std::endl;
 
     return 0;
