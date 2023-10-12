@@ -78,22 +78,6 @@ void make_chunks_and_send_as_dgrams(quiche_conn *conn, const uint8_t *buf, size_
     return;
 }
 
-void make_chunks_and_send_in_stream(quiche_conn *conn, uint64_t stream_id, const uint8_t *buf, size_t buf_len, bool fin) {
-    int total_sent = 0;
-    while (total_sent < buf_len) {
-        auto bytes_sent = quiche_conn_stream_send(conn, stream_id, (uint8_t *) buf, std::min((unsigned long)MAX_PKT_SIZE, buf_len-total_sent), false);
-        if (bytes_sent == -1) {
-            std::cerr << "Could not send packet in stream: " << bytes_sent << std::endl;
-            break;
-        }
-        total_sent += bytes_sent;
-    }
-
-    std::cout << "Total Stream Data sent: " << total_sent << std::endl;
-
-    return;
-}
-
 #define MAX_TOKEN_LEN \
     sizeof("quiche") - 1 + \
     sizeof(struct sockaddr_storage) + \
@@ -134,7 +118,6 @@ static void timeout_cb(EV_P_ ev_timer *w, int revents);
 // }
 
 ssize_t send_using_txtime(int sock, uint8_t* out, ssize_t len, int flags, struct sockaddr * dst_addr, socklen_t dst_addr_len, timespec txtime) {
-    
     // return sendto(sock, out, len, flags, dst_addr, dst_addr_len);
     struct iovec iov[1];
     iov[0].iov_base = out;
@@ -149,20 +132,19 @@ ssize_t send_using_txtime(int sock, uint8_t* out, ssize_t len, int flags, struct
     msg.msg_iovlen = 1;
 
     // Create a control message buffer
-    // char control_data[CMSG_SPACE(sizeof(struct timespec))];
-    // msg.msg_control = control_data;
-    // msg.msg_controllen = sizeof(control_data);
+    char control_data[CMSG_SPACE(sizeof(struct timespec))];
+    msg.msg_control = control_data;
+    msg.msg_controllen = sizeof(control_data);
 
-    // // Set up the control message
-    // struct cmsghdr *cmsg;
-    // cmsg = CMSG_FIRSTHDR(&msg);
-    // cmsg->cmsg_level = SOL_SOCKET;
-    // cmsg->cmsg_type = SCM_TXTIME;
-    // cmsg->cmsg_len = CMSG_LEN(sizeof(uint64_t));
-    // uint64_t timestamp_ns = txtime.tv_sec *(1000ULL * 1000 * 1000) + txtime.tv_nsec;
-    // // uint64_t timestamp_ns = txtime.tv_sec *(1000ULL * 1000 * 1000 * 1.001) + txtime.tv_nsec;
-    // // uint64_t timestamp_ns = 0;
-    // memcpy(CMSG_DATA(cmsg), &timestamp_ns, sizeof(uint64_t));
+    // Set up the control message
+    struct cmsghdr *cmsg;
+    cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_TXTIME;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(uint64_t));
+    uint64_t timestamp_ns = txtime.tv_sec *(1000ULL * 1000 * 1000) + txtime.tv_nsec;
+
+    memcpy(CMSG_DATA(cmsg), &timestamp_ns, sizeof(uint64_t));
 
     // Send the message with control information
     ssize_t bytes_sent = sendmsg(sock, &msg, 0);
@@ -172,6 +154,19 @@ ssize_t send_using_txtime(int sock, uint8_t* out, ssize_t len, int flags, struct
         return -1;
     }
     return bytes_sent;
+}
+
+constexpr uint64_t NANOS_PER_SEC = 1'000'000'000;
+
+uint64_t std_time_to_u64(const std::chrono::time_point<std::chrono::system_clock>& time) {
+    const std::chrono::time_point<std::chrono::system_clock> UNIX_EPOCH;
+
+    auto raw_time = time - UNIX_EPOCH;
+
+    auto sec = std::chrono::duration_cast<std::chrono::seconds>(raw_time).count();
+    auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(raw_time % std::chrono::seconds(1)).count();
+
+    return static_cast<uint64_t>(sec) * NANOS_PER_SEC + static_cast<uint64_t>(nsec);
 }
 
 static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
@@ -203,14 +198,6 @@ static void flush_egress(struct ev_loop *loop, struct conn_io *conn_io) {
         }
 
         total_flushed += sent;
-        auto ats = (double)send_info.at.tv_sec;
-        auto atns = (double)send_info.at.tv_nsec;
-        // if (ats != 0 || atns != 0)
-        //     std::cout << ats << " : " << atns << std::endl;
-
-        // fprintf(stderr, "senttt %zd bytes\n", sent);
-        // std::string str((char *)out, sent);
-        // std::cout << str << std::endl;
     }
 
     double t = quiche_conn_timeout_as_nanos(conn_io->conn) / 1e9f;
@@ -597,20 +584,12 @@ static void setsockopt_txtime(int sock)
     // }
 
     // Method from https://unix.stackexchange.com/questions/718661/after-enabling-etf-qdisc-packets-are-only-sent-for-a-few-seconds
-    struct sock_txtime so_txtime_val = { .clockid = CLOCK_MONOTONIC };
-    struct sock_txtime so_txtime_val_read = { 1 };
-    socklen_t vallen = sizeof(so_txtime_val);
+    struct sock_txtime so_txtime_val = { .clockid = CLOCK_MONOTONIC, .flags = 0 };
     so_txtime_val.flags = (SOF_TXTIME_REPORT_ERRORS);
+
     if (setsockopt(sock, SOL_SOCKET, SO_TXTIME, &so_txtime_val, sizeof(so_txtime_val))) {
-        perror("setsockopt txtime (1)");
-    }
-
-    if (getsockopt(sock, SOL_SOCKET, SO_TXTIME, &so_txtime_val_read, &vallen)) {
-        perror("getsockopt txtime (2)");
-    }
-
-    if (vallen != sizeof(so_txtime_val) || memcmp(&so_txtime_val, &so_txtime_val_read, vallen)) {
-        perror("getsockopt txtime: mismatch");
+        perror("setsockopt txtime::");
+        exit(1);
     }
 }
 

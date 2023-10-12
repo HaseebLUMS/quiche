@@ -30,7 +30,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <unistd.h>
-
+#include <chrono>
 #include <iostream>
 
 #include <fcntl.h>
@@ -55,7 +55,9 @@ ev_timer udp_timer;
 int reliable_recvd = 0;
 int unreliable_recvd = 0;
 int total_recv = 0;
-
+int start_time = 0;
+int end_time = 0;
+int end_time_tcp = 0;
 
 struct conn_io {
     ev_timer timer;
@@ -67,6 +69,14 @@ struct conn_io {
 
     quiche_conn *conn;
 };
+
+int64_t get_current_time() {
+    auto currentTime = std::chrono::system_clock::now();
+    auto durationSinceEpoch = currentTime.time_since_epoch();
+    auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(durationSinceEpoch);
+    int64_t microsecondsCount = microseconds.count();
+    return microsecondsCount;
+}
 
 // static void debug_log(const char *line, void *argp) {
 //     fprintf(stderr, "%s\n", line);
@@ -208,11 +218,9 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
                 reliable_recvd += recv_len;
                 // printf("%.*s", (int) recv_len, buf);
 
-                // if (fin) {
-                //     if (quiche_conn_close(conn_io->conn, true, 0, NULL, 0) < 0) {
-                //         fprintf(stderr, "failed to close connection\n");
-                //     }
-                // }
+                if (fin) {
+                    end_time_tcp = get_current_time();
+                }
             }
         }
 
@@ -226,20 +234,23 @@ static void recv_cb(EV_P_ ev_io *w, int revents) {
                 // std::cout << "Total Dgram Bytes Received: " << recv_len << std::endl;
                 unreliable_recvd += recv_len;
                 if (unreliable_recvd >= UNRELIABLE_DATA_SIZE) {
+                    end_time = get_current_time();
                     ev_timer_stop(loop, &udp_timer);
+                    ev_break(EV_A_ EVBREAK_ONE);
                 }
-                // ev_timer_start(loop, &udp_timer);
-                // printf("%.*s", (int) recv_len, buf);
+                if (start_time == 0) {
+                    start_time = get_current_time();
+                    ev_timer_start(loop, &udp_timer);
+                }
             }
         }
-
     }
 
     flush_egress(loop, conn_io);
 }
 
 static void udp_timeout_cb(EV_P_ ev_timer *w, int revents) {
-    std::cout << "(Timeout) Unreliable data received: " << (1.0*unreliable_recvd) /  UNRELIABLE_DATA_SIZE << std::endl;
+    end_time = get_current_time();
     ev_break(EV_A_ EVBREAK_ONE);
 }
 
@@ -375,7 +386,8 @@ int main(int argc, char *argv[]) {
     ev_init(&conn_io->timer, timeout_cb);
     conn_io->timer.data = conn_io;
 
-    ev_timer_init(&udp_timer, udp_timeout_cb, 1, 0.0);
+    // ev_timer_init(&udp_timer, udp_timeout_cb, ev_time() - ev_now(loop) + 1, 0.0);
+    ev_timer_init(&udp_timer, udp_timeout_cb, 0.4, 0.0);
 
     flush_egress(loop, conn_io);
 
@@ -387,8 +399,8 @@ int main(int argc, char *argv[]) {
 
     quiche_config_free(config);
 
-    std::cout << "Reliably Received: " << reliable_recvd << " " << (reliable_recvd*1.0/RELIABLE_DATA_SIZE) << std::endl;
-    std::cout << "Unreliably Received: " << unreliable_recvd << " " << (unreliable_recvd*1.0/UNRELIABLE_DATA_SIZE) << std::endl;
+    std::cout << "Reliably Received: " << (reliable_recvd*1.0/RELIABLE_DATA_SIZE) << " in " << end_time_tcp-start_time << " us." << std::endl;
+    std::cout << "Unreliably Received: " << (unreliable_recvd*1.0/UNRELIABLE_DATA_SIZE) << " in " << end_time-start_time << " us."<< std::endl;
     std::cout << "Total Received: " << total_recv << std::endl;
 
     return 0;
